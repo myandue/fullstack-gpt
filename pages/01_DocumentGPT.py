@@ -1,0 +1,179 @@
+import streamlit as st
+
+# File
+from langchain.vectorstores import FAISS
+from langchain.document_loaders import UnstructuredFileLoader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.storage import LocalFileStore
+from langchain.embeddings import OpenAIEmbeddings, CacheBackedEmbeddings
+from langchain.vectorstores import FAISS
+
+# Chat
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+from langchain.memory import ConversationBufferMemory
+
+### Settings
+# Set the page configuration
+st.set_page_config(
+    page_title="DocumentGPT",
+    page_icon=":page_facing_up:",
+)
+
+# chat
+chat = ChatOpenAI(temperature=0.1)
+
+# memory
+print(st.session_state)
+if "memory" not in st.session_state:
+    print("Creating new memory")
+    st.session_state["memory"] = ConversationBufferMemory(
+        return_messages=True,
+        memory_key="history",
+    )
+memory = st.session_state["memory"]
+print(memory)
+
+
+### Functions
+# file
+# 업로드한 파일이 이미 존재하는 경우 해당 함수를 실행하지 않음
+@st.cache_data(show_spinner="Embedding file...")
+def embedding_file(file):
+    # 업로드한 파일 저장
+    file_content = uploaded_file.read()
+    file_path = f"./.cache/files/{uploaded_file.name}"
+    with open(file_path, "wb") as f:
+        f.write(file_content)
+
+    # set up the embedding process
+    cache_dir = LocalFileStore(f"./.cache/embeddings/{uploaded_file.name}")
+    splitter = CharacterTextSplitter.from_tiktoken_encoder(
+        separator="\n",
+        chunk_size=600,
+        chunk_overlap=100,
+    )
+    embeddings = OpenAIEmbeddings()
+
+    # file embedding
+    file = UnstructuredFileLoader(f"./.cache/files/{uploaded_file.name}")
+    docs = file.load_and_split(text_splitter=splitter)
+    cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
+        embeddings, cache_dir
+    )
+    vector_store = FAISS.from_documents(docs, cached_embeddings)
+    retriver = vector_store.as_retriever()
+
+    return retriver
+
+
+# chat
+def save_message(message, role):
+    st.session_state.messages.append({"role": role, "message": message})
+
+
+def send_message(message, role, save=True):
+    with st.chat_message(role):
+        st.write(message)
+    if save:
+        save_message(message, role)
+
+
+def paint_history():
+    for message in st.session_state["messages"]:
+        send_message(
+            message["message"],
+            message["role"],
+            save=False,
+        )
+
+
+# ai
+def load_memory(_):
+    history = memory.load_memory_variables({})["history"]
+    return history
+
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
+# ai response
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            (
+                "You are a helpful assistant. Answer quetions using"
+                " only the following context. If you don't know the"
+                " answer just say you don't know, don't make it"
+                " up:\n\n"
+                "Context:\n{context}\n\n"
+                "Previous conversation:\n{history}\n\n"
+            ),
+        ),
+        ("human", "{question}"),
+    ]
+)
+
+
+def respond(message, retriver):
+    formatted_prompt = prompt.format_prompt(
+        context="", question=message, history=load_memory
+    )
+    print(f"Formatted prompt: {formatted_prompt}")
+
+    # chain은 하나의 string(message)을 받는다
+    chain = (
+        {
+            # retriver는 string(message)을 받아 List of Document를 chain의 두 번째 component(RunnableLambda)에 전달
+            # RunnableLambda는 List of Document를 받아 함수(format_docs)를 실행
+            # prompt의 context에 들어갈 string을 생성해 반환해줌
+            "context": retriver | RunnableLambda(format_docs),
+            "question": RunnablePassthrough(),
+            "history": load_memory,
+        }
+        | prompt
+        | chat
+    )
+
+    response = chain.invoke(message).content
+    memory.save_context({"input": message}, {"output": response})
+
+    return response
+
+
+### Main
+# File upload widget
+with st.sidebar:
+    uploaded_file = st.file_uploader(
+        "Upload a .pdf .txt or .docx file", type=["pdf", "txt", "docx"]
+    )
+
+# File이 업로드 되면, File embedding 및 챗봇 시작
+if uploaded_file:
+    retriver = embedding_file(uploaded_file)
+    send_message(
+        "File uploaded and embedded successfully!",
+        "ai",
+        save=False,
+    )
+
+    # 채팅 히스토리
+    paint_history()
+
+    # 메세지 입력창
+    message = st.chat_input(
+        "Ask me anything about the uploaded file!",
+    )
+
+    # 채팅
+    if message:
+        send_message(message, "human")
+        response = respond(message, retriver)
+        send_message(response, "ai")
+
+
+else:
+    st.session_state["messages"] = []
