@@ -13,6 +13,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.memory import ConversationBufferMemory
+from langchain.callbacks.base import BaseCallbackHandler
 
 ### Settings
 # Set the page configuration
@@ -21,19 +22,35 @@ st.set_page_config(
     page_icon=":page_facing_up:",
 )
 
+
+# chat streaming
+class ChatCallbackHandler(BaseCallbackHandler):
+    ai_message = ""
+
+    def on_llm_start(self, *args, **kwargs):
+        self.message_box = st.empty()
+
+    def on_llm_new_token(self, token, *args, **kwargs):
+        self.ai_message += token
+        self.message_box.write(self.ai_message)
+
+    def on_llm_end(self, *args, **kwargs):
+        save_message(self.ai_message, "ai")
+
+
 # chat
-chat = ChatOpenAI(temperature=0.1)
+chat = ChatOpenAI(
+    temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
+)
+
 
 # memory
-print(st.session_state)
 if "memory" not in st.session_state:
-    print("Creating new memory")
     st.session_state["memory"] = ConversationBufferMemory(
         return_messages=True,
         memory_key="history",
     )
 memory = st.session_state["memory"]
-print(memory)
 
 
 ### Functions
@@ -119,11 +136,6 @@ prompt = ChatPromptTemplate.from_messages(
 
 
 def respond(message, retriver):
-    formatted_prompt = prompt.format_prompt(
-        context="", question=message, history=load_memory
-    )
-    print(f"Formatted prompt: {formatted_prompt}")
-
     # chain은 하나의 string(message)을 받는다
     chain = (
         {
@@ -140,8 +152,6 @@ def respond(message, retriver):
 
     response = chain.invoke(message).content
     memory.save_context({"input": message}, {"output": response})
-
-    return response
 
 
 ### Main
@@ -171,8 +181,8 @@ if uploaded_file:
     # 채팅
     if message:
         send_message(message, "human")
-        response = respond(message, retriver)
-        send_message(response, "ai")
+        with st.chat_message("ai"):
+            respond(message, retriver)
 
 
 else:
