@@ -1,15 +1,15 @@
 import streamlit as st
 
 # File
-from langchain.vectorstores import FAISS
-from langchain.document_loaders import UnstructuredFileLoader
+from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.storage import LocalFileStore
-from langchain.embeddings import OpenAIEmbeddings, CacheBackedEmbeddings
-from langchain.vectorstores import FAISS
+from langchain.embeddings.cache import CacheBackedEmbeddings
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
 
 # Chat
-from langchain.chat_models import ChatOpenAI
+from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.memory import ConversationBufferMemory
@@ -56,7 +56,7 @@ memory = st.session_state["memory"]
 ### Functions
 # file
 # 업로드한 파일이 이미 존재하는 경우 해당 함수를 실행하지 않음
-@st.cache_data(show_spinner="Embedding file...")
+@st.cache_resource(show_spinner="Embedding file...")
 def embedding_file(file):
     # 업로드한 파일 저장
     file_content = uploaded_file.read()
