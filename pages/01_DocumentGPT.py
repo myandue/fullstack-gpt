@@ -57,14 +57,22 @@ memory = st.session_state["memory"]
 # 업로드한 파일이 이미 존재하는 경우 해당 함수를 실행하지 않음
 @st.cache_resource(show_spinner="Embedding file...")
 def embedding_file(file):
+    # setting path
+    file_path = "./.cache/files"
+    if not os.path.exists(file_path):
+        os.makedirs(file_path)
+
+    cache_path = "./.cache/embeddings"
+    if not os.path.exists(cache_path):
+        os.makedirs(cache_path)
+
     # 업로드한 파일 저장
     file_content = uploaded_file.read()
-    file_path = f"./.cache/files/{uploaded_file.name}"
-    with open(file_path, "wb") as f:
+    with open(f"{file_path}/{uploaded_file.name}", "wb") as f:
         f.write(file_content)
 
     # set up the embedding process
-    cache_dir = LocalFileStore(f"./.cache/embeddings/{uploaded_file.name}")
+    cache_dir = LocalFileStore(f"{cache_path}/{uploaded_file.name}")
     splitter = CharacterTextSplitter.from_tiktoken_encoder(
         separator="\n",
         chunk_size=600,
