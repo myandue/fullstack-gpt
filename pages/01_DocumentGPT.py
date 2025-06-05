@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+import os
 
 # File
 from langchain_community.document_loaders import UnstructuredFileLoader
@@ -173,7 +173,7 @@ if not st.session_state.get("api_key"):
 
 else:
     # Chat
-    openai.api_key = st.session_state["api_key"]
+    os.environ["OPENAI_API_KEY"] = st.session_state["api_key"]
 
     if chat is None:
         chat = ChatOpenAI(
