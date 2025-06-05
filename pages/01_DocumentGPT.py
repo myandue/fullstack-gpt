@@ -169,11 +169,12 @@ if not st.session_state.get("api_key"):
             placeholder="sk-...",
             key="api_key",
         )
-        openai.api_key = st.session_state["api_key"]
 
 
 else:
     # Chat
+    openai.api_key = st.session_state["api_key"]
+
     if chat is None:
         chat = ChatOpenAI(
             temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
