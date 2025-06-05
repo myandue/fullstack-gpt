@@ -2,7 +2,7 @@ import streamlit as st
 import openai
 
 # File
-from langchain_unstructured import UnstructuredLoader
+from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.storage import LocalFileStore
 from langchain.embeddings.cache import CacheBackedEmbeddings
@@ -75,7 +75,7 @@ def embedding_file(file):
     embeddings = OpenAIEmbeddings()
 
     # file embedding
-    file = UnstructuredLoader(f"./.cache/files/{uploaded_file.name}")
+    file = UnstructuredFileLoader(f"./.cache/files/{uploaded_file.name}")
     docs = file.load_and_split(text_splitter=splitter)
     cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
         embeddings, cache_dir
