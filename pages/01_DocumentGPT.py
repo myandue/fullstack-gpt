@@ -40,9 +40,7 @@ class ChatCallbackHandler(BaseCallbackHandler):
 
 
 # chat
-chat = ChatOpenAI(
-    temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
-)
+chat = None
 
 
 # memory
@@ -173,7 +171,19 @@ if "api_key" not in st.session_state:
 else:
     openai.api_key = st.session_state["api_key"]
 
+    # Chat
+    if chat is None:
+        chat = ChatOpenAI(
+            temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
+        )
+
     # File upload widget
+    st.title("DocumentGPT")
+    st.markdown(
+        """
+        ## Upload a document to ask questions about its content.
+        """,
+    )
     with st.sidebar:
         uploaded_file = st.file_uploader(
             "Upload a .pdf .txt or .docx file", type=["pdf", "txt", "docx"]
