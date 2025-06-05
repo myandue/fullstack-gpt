@@ -155,7 +155,7 @@ def respond(message, retriver):
 
 ### Main
 # api key widget
-if "api_key" not in st.session_state:
+if not st.session_state.get("api_key"):
     st.markdown(
         """
         ## Please enter your OpenAI API key<br>on the sidebar to use DocumentGPT.
@@ -163,14 +163,16 @@ if "api_key" not in st.session_state:
         unsafe_allow_html=True,
     )
     with st.sidebar:
-        st.session_state["api_key"] = st.text_input(
+        st.text_input(
             "OpenAI API Key",
             type="password",
             placeholder="sk-...",
+            key="api_key",
         )
-else:
-    openai.api_key = st.session_state["api_key"]
+        openai.api_key = st.session_state["api_key"]
 
+
+else:
     # Chat
     if chat is None:
         chat = ChatOpenAI(
