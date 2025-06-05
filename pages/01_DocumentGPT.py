@@ -155,6 +155,19 @@ def respond(message, retriver):
 
 ### Main
 # api key widget
+with st.sidebar:
+    st.text_input(
+        "OpenAI API Key",
+        type="password",
+        placeholder="sk-...",
+        key="api_key",
+        disabled=bool(st.session_state.get("api_key")),
+    )
+
+    if st.session_state.get("api_key"):
+        st.success("✅ API Key registered")
+
+
 if not st.session_state.get("api_key"):
     st.markdown(
         """
@@ -162,13 +175,6 @@ if not st.session_state.get("api_key"):
         """,
         unsafe_allow_html=True,
     )
-    with st.sidebar:
-        st.text_input(
-            "OpenAI API Key",
-            type="password",
-            placeholder="sk-...",
-            key="api_key",
-        )
 
 
 else:
@@ -181,12 +187,6 @@ else:
         )
 
     # File upload widget
-    st.title("DocumentGPT")
-    st.markdown(
-        """
-        ## Upload a document to ask questions about its content.
-        """,
-    )
     with st.sidebar:
         uploaded_file = st.file_uploader(
             "Upload a .pdf .txt or .docx file", type=["pdf", "txt", "docx"]
@@ -216,4 +216,10 @@ else:
                 respond(message, retriver)
 
     else:
+        st.title("DocumentGPT")
+        st.markdown(
+            """
+            ## Upload a document to ask questions about its content.
+            """,
+        )
         st.session_state["messages"] = []
