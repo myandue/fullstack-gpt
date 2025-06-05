@@ -1,16 +1,17 @@
 import streamlit as st
+import openai
 
 # File
-from langchain_community.document_loaders import UnstructuredFileLoader
+from langchain_unstructured import UnstructuredLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.storage import LocalFileStore
 from langchain.embeddings.cache import CacheBackedEmbeddings
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # Chat
 from langchain_openai.chat_models import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.memory import ConversationBufferMemory
 from langchain.callbacks.base import BaseCallbackHandler
@@ -74,7 +75,7 @@ def embedding_file(file):
     embeddings = OpenAIEmbeddings()
 
     # file embedding
-    file = UnstructuredFileLoader(f"./.cache/files/{uploaded_file.name}")
+    file = UnstructuredLoader(f"./.cache/files/{uploaded_file.name}")
     docs = file.load_and_split(text_splitter=splitter)
     cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
         embeddings, cache_dir
@@ -155,35 +156,51 @@ def respond(message, retriver):
 
 
 ### Main
-# File upload widget
-with st.sidebar:
-    uploaded_file = st.file_uploader(
-        "Upload a .pdf .txt or .docx file", type=["pdf", "txt", "docx"]
+# api key widget
+if "api_key" not in st.session_state:
+    st.markdown(
+        """
+        ## Please enter your OpenAI API key<br>on the sidebar to use DocumentGPT.
+        """,
+        unsafe_allow_html=True,
     )
-
-# File이 업로드 되면, File embedding 및 챗봇 시작
-if uploaded_file:
-    retriver = embedding_file(uploaded_file)
-    send_message(
-        "File uploaded and embedded successfully!",
-        "ai",
-        save=False,
-    )
-
-    # 채팅 히스토리
-    paint_history()
-
-    # 메세지 입력창
-    message = st.chat_input(
-        "Ask me anything about the uploaded file!",
-    )
-
-    # 채팅
-    if message:
-        send_message(message, "human")
-        with st.chat_message("ai"):
-            respond(message, retriver)
-
-
+    with st.sidebar:
+        st.session_state["api_key"] = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            placeholder="sk-...",
+        )
 else:
-    st.session_state["messages"] = []
+    openai.api_key = st.session_state["api_key"]
+
+    # File upload widget
+    with st.sidebar:
+        uploaded_file = st.file_uploader(
+            "Upload a .pdf .txt or .docx file", type=["pdf", "txt", "docx"]
+        )
+
+    # File이 업로드 되면, File embedding 및 챗봇 시작
+    if uploaded_file:
+        retriver = embedding_file(uploaded_file)
+        send_message(
+            "File uploaded and embedded successfully!",
+            "ai",
+            save=False,
+        )
+
+        # 채팅 히스토리
+        paint_history()
+
+        # 메세지 입력창
+        message = st.chat_input(
+            "Ask me anything about the uploaded file!",
+        )
+
+        # 채팅
+        if message:
+            send_message(message, "human")
+            with st.chat_message("ai"):
+                respond(message, retriver)
+
+    else:
+        st.session_state["messages"] = []
