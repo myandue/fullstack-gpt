@@ -96,7 +96,7 @@ def search_wikipedia(topic):
 
 
 # prompts
-question_prompt = ChatPromptTemplate.from_messages(
+prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
@@ -105,20 +105,6 @@ question_prompt = ChatPromptTemplate.from_messages(
          Based ONLY the content of the provided documents, create a quiz with 10 questions to test the user's knowledge about the text.
          Questions' difficulty should be around {level}.
          Each question should have 4 multiple choice answers, with one correct answer and three of them must be wrong.
-         Use (o) for the correct answer.
-
-         Question examples:
-
-         Question: What is the capital of France?
-         Answers: Paris (o) | Seoul | London | New York
-
-         Question: What is the largest planet in our solar system?
-         Answers: Earth | Mars | Jupiter (o) | Saturn
-
-         Question: What is the main ingredient in guacamole?
-         Answers: Tomato | Avocado (o) | Potato | Onion
-
-         Your turn!
 
          Context: {context}
          """,
@@ -147,7 +133,7 @@ def make_quiz(_docs, topic, level):
                 "level": lambda x: x["level"],
             }
         )
-        | question_prompt
+        | prompt
         | chat.bind(function_call={"name": "make_quiz"}, functions=[function])
     )
 
