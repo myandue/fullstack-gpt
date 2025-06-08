@@ -26,6 +26,41 @@ chat = None
 docs = None
 success_count = 0
 
+function = {
+    "name": "make_quiz",
+    "description": (
+        "function that takes a list of questions and answers and returns a"
+        " quiz"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "answers": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "answer": {"type": "string"},
+                                    "correct": {"type": "boolean"},
+                                },
+                                "required": ["answer", "correct"],
+                            },
+                        },
+                    },
+                    "required": ["question", "answers"],
+                },
+            }
+        },
+        "required": ["questions"],
+    },
+}
+
 
 ### Functions
 # file
@@ -60,16 +95,6 @@ def search_wikipedia(topic):
     return retriever.get_relevant_documents(topic)
 
 
-# output parser
-class QuizOutputParser(BaseOutputParser):
-    def parse(self, text):
-        text = text.replace("```", "").replace("json", "").strip()
-        return json.loads(text)
-
-
-output_parser = QuizOutputParser()
-
-
 # prompts
 question_prompt = ChatPromptTemplate.from_messages(
     [
@@ -101,69 +126,6 @@ question_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-formatting_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-        You are a helpful assistant that formats quizzes.
-        Format the quiz into JSON format.
-        Answers with (o) are correct answers.
-
-        Example Input:
-
-        Question: What is the capital of France?
-        Answers: Paris (o) | Seoul | London | New York
-
-        Question: What is the largest planet in our solar system?
-        Answers: Earth | Mars | Jupiter (o) | Saturn
-
-        Question: What is the main ingredient in guacamole?
-        Answers: Tomato | Avocado (o) | Potato | Onion
-
-        Example Output:
-        ```json
-        {{
-            "questions": [
-                {{
-                    "question": "What is the capital of France?",
-                    "answers": [
-                        {{"answer": "Paris", "correct": true}},
-                        {{"answer": "Seoul", "correct": false}},
-                        {{"answer": "London", "correct": false}},
-                        {{"answer": "New York", "correct": false}}
-                    ]
-                }},
-                {{
-                    "question": "What is the largest planet in our solar system?",
-                    "answers": [
-                        {{"answer": "Earth", "correct": false}},
-                        {{"answer": "Mars", "correct": false}},
-                        {{"answer": "Jupiter", "correct": true}},
-                        {{"answer": "Saturn", "correct": false}}
-                    ]
-                }},
-                {{
-                    "question": "What is the main ingredient in guacamole?",
-                    "answers": [
-                        {{"answer": "Tomato", "correct": false}},
-                        {{"answer": "Avocado", "correct": true}},
-                        {{"answer": "Potato", "correct": false}},
-                        {{"answer": "Onion", "correct": false}}
-                    ]
-                }}
-            ]
-        }}
-        ```
-
-        Your turn!
-        
-        Questions: {context}
-        """,
-        ),
-    ]
-)
-
 
 ### caching 에 대한 기록
 # @st.cache_resource는 함수의 매개변수를 해싱하고, 그것을 기반으로 캐시를 저장한다.
@@ -178,7 +140,7 @@ formatting_prompt = ChatPromptTemplate.from_messages(
 @st.cache_resource(show_spinner="Creating quiz...")
 def make_quiz(_docs, topic, level):
     # chain
-    question_chain = (
+    chain = (
         RunnableMap(
             {
                 "context": lambda x: format_docs(x["docs"]),
@@ -186,19 +148,14 @@ def make_quiz(_docs, topic, level):
             }
         )
         | question_prompt
-        | chat
-    )
-    formatting_chain = formatting_prompt | chat
-    final_chain = (
-        RunnableMap(
-            {"docs": lambda x: x["docs"], "level": lambda x: x["level"]}
-        )
-        | {"context": question_chain}
-        | formatting_chain
-        | output_parser
+        | chat.bind(function_call={"name": "make_quiz"}, functions=[function])
     )
 
-    return final_chain.invoke({"docs": _docs, "level": level})
+    return json.loads(
+        chain.invoke({"docs": _docs, "level": level}).additional_kwargs[
+            "function_call"
+        ]["arguments"]
+    )
 
 
 ## Main
