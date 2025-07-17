@@ -6,6 +6,10 @@ import math
 import os
 import glob
 from openai import OpenAI
+from langchain.prompts import PromptTemplate
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import TextLoader
+from langchain.schema import StrOutputParser
 
 st.title("MeetingGPT")
 openai = OpenAI()
@@ -107,7 +111,60 @@ def transcribe_audio(audio_segments_folder, filename):
     return text_path
 
 
+@st.cache_resource(show_spinner="Creating summary...")
+def create_summary(text_path):
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=500, chunk_overlap=100
+    )
+    loader = TextLoader(text_path)
+    documents = loader.load_and_split(text_splitter=splitter)
+
+    llm = OpenAI()
+
+    initial_prompt = PromptTemplate.from_template(
+        """
+        Write a concise summary of the following:
+        {context}
+        """
+    )
+    initial_chain = initial_prompt | llm | StrOutputParser()
+    summary = initial_chain.invoke({"text": documents[0].page_content})
+
+    summary_prompt = PromptTemplate.from_template(
+        """
+        Produce a final summary.
+
+        Existing summary up to this point:
+        {previous_summary}
+
+        New context:
+        ------------
+        {context}
+        ------------
+
+        Given the new context, refine the original summary.
+        If there is nothing to add, just return the previous summary.
+        """
+    )
+    summary_chain = summary_prompt | llm | StrOutputParser()
+
+    for i, doc in enumerate(documents[1:]):
+        print(f"Processing document {i + 1}/{len(documents) - 1}")
+
+        summary = summary_chain.invoke(
+            {"previous_summary": summary, "context": doc.page_content}
+        )
+
+        print(summary)
+
+    return summary
+
+
 ### Main
+
+transcription_tap, summary_tap, qna_tap = st.tabs(
+    ["Transcription", "Summary", "Q&A"]
+)
 
 # File upload widget
 with st.sidebar:
@@ -127,4 +184,11 @@ if uploaded_video:
     )
 
     transcription = open(text_path, "r").read()
-    st.write(transcription)
+
+    with transcription_tap:
+        st.write(transcription)
+
+    with summary_tap:
+        if st.button("Generate Summary"):
+            summary_text = create_summary(text_path)
+            st.write(summary_text)
