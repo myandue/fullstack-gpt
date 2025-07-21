@@ -6,6 +6,7 @@ import math
 import os
 import glob
 from openai import OpenAI
+from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import TextLoader
@@ -114,25 +115,32 @@ def transcribe_audio(audio_segments_folder, filename):
 @st.cache_resource(show_spinner="Creating summary...")
 def create_summary(text_path):
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=500, chunk_overlap=100
+        chunk_size=800, chunk_overlap=100
     )
     loader = TextLoader(text_path)
     documents = loader.load_and_split(text_splitter=splitter)
 
-    llm = OpenAI()
+    llm = ChatOpenAI(temperature=0.1)
 
     initial_prompt = PromptTemplate.from_template(
         """
-        Write a concise summary of the following:
+        Write a concise summary of the following.
+        The summary should be in the language of the text.
+        ------------
         {context}
+        ------------
+        Use the language of the text.
         """
     )
     initial_chain = initial_prompt | llm | StrOutputParser()
-    summary = initial_chain.invoke({"text": documents[0].page_content})
+    summary = initial_chain.invoke({"context": documents[0].page_content})
+    print("Initial summary:")
+    print(summary)
 
     summary_prompt = PromptTemplate.from_template(
         """
-        Produce a final summary.
+        Product a final summary.
+        The summary should be in the language of the text.
 
         Existing summary up to this point:
         {previous_summary}
@@ -143,7 +151,6 @@ def create_summary(text_path):
         ------------
 
         Given the new context, refine the original summary.
-        If there is nothing to add, just return the previous summary.
         """
     )
     summary_chain = summary_prompt | llm | StrOutputParser()
