@@ -7,13 +7,32 @@ import os
 import glob
 from openai import OpenAI
 from langchain_openai.chat_models import ChatOpenAI
-from langchain.prompts import PromptTemplate
+from langchain.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import TextLoader
 from langchain.schema import StrOutputParser
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain.embeddings.cache import CacheBackedEmbeddings
+from langchain.storage import LocalFileStore
+from langchain_community.vectorstores import FAISS
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+from langchain.memory import ConversationBufferMemory
 
 st.title("MeetingGPT")
+
 openai = OpenAI()
+
+splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size=800, chunk_overlap=100
+)
+
+llm = ChatOpenAI(temperature=0.1)
+
+if "memory" not in st.session_state:
+    st.session_state["memory"] = ConversationBufferMemory(
+        return_messages=True, memory_key="history"
+    )
+memory = st.session_state["memory"]
 
 
 def check_dir(directory):
@@ -114,13 +133,8 @@ def transcribe_audio(audio_segments_folder, filename):
 
 @st.cache_resource(show_spinner="Creating summary...")
 def create_summary(text_path):
-    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=800, chunk_overlap=100
-    )
     loader = TextLoader(text_path)
-    documents = loader.load_and_split(text_splitter=splitter)
-
-    llm = ChatOpenAI(temperature=0.1)
+    docs = loader.load_and_split(text_splitter=splitter)
 
     initial_prompt = PromptTemplate.from_template(
         """
@@ -133,7 +147,7 @@ def create_summary(text_path):
         """
     )
     initial_chain = initial_prompt | llm | StrOutputParser()
-    summary = initial_chain.invoke({"context": documents[0].page_content})
+    summary = initial_chain.invoke({"context": docs[0].page_content})
     print("Initial summary:")
     print(summary)
 
@@ -155,8 +169,8 @@ def create_summary(text_path):
     )
     summary_chain = summary_prompt | llm | StrOutputParser()
 
-    for i, doc in enumerate(documents[1:]):
-        print(f"Processing document {i + 1}/{len(documents) - 1}")
+    for i, doc in enumerate(docs[1:]):
+        print(f"Processing document {i + 1}/{len(docs) - 1}")
 
         summary = summary_chain.invoke(
             {"previous_summary": summary, "context": doc.page_content}
@@ -167,9 +181,81 @@ def create_summary(text_path):
     return summary
 
 
+def embedding_file(file_path):
+    cache_dir = "./.cache/embeddings"
+    check_dir(cache_dir)
+
+    embeddings = OpenAIEmbeddings()
+
+    cache_path = LocalFileStore(f"{cache_dir}/{os.path.basename(file_path)}")
+    loader = TextLoader(file_path)
+    docs = loader.load_and_split(text_splitter=splitter)
+    cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
+        embeddings, cache_path
+    )
+    vector_store = FAISS.from_documents(docs, cached_embeddings)
+    retriever = vector_store.as_retriever()
+
+    return retriever
+
+
+# TODO
+# 챗봇 역할을 클래스로 따로 분리해야겠음
+
+
+def answer_question(question, file_path):
+    retriever = embedding_file(file_path)
+
+    qna_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                    You are a helpful assistant. Answer questions using only the following context.
+                    If you don't know the answer, just say you don't know. Don't make it up.
+
+
+                    Context:
+                    {context}
+
+                    Previous conversation:
+                    {history}
+                    """,
+            ),
+            ("human", "{question}"),
+        ]
+    )
+
+    qna_chain = (
+        (
+            {
+                "context": retriever | RunnableLambda(format_docs),
+                "question": RunnablePassthrough(),
+                "history": load_memory,
+            }
+        )
+        | qna_prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    answer = qna_chain.invoke(question)
+
+    return answer
+
+
+def load_memory(_):
+    history = memory.load_memory_variables({})["history"]
+    return history
+
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
 ### Main
 
-transcription_tap, summary_tap, qna_tap = st.tabs(
+transcription_tab, summary_tab, qna_tab = st.tabs(
     ["Transcription", "Summary", "Q&A"]
 )
 
@@ -192,10 +278,16 @@ if uploaded_video:
 
     transcription = open(text_path, "r").read()
 
-    with transcription_tap:
+    with transcription_tab:
         st.write(transcription)
 
-    with summary_tap:
+    with summary_tab:
         if st.button("Generate Summary"):
             summary_text = create_summary(text_path)
             st.write(summary_text)
+
+    with qna_tab:
+        question = st.text_input("Ask a question about the meeting:")
+        if question and st.button("Get Answer"):
+            answer = answer_question(question, text_path)
+            st.write(answer)
