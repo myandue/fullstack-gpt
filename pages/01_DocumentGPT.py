@@ -1,6 +1,10 @@
 import streamlit as st
 import os
 
+# utils
+from utils.chat_callback_handler import ChatCallbackHandler
+from utils.chatbot_session import ChatBotSession
+
 # File
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
@@ -24,32 +28,19 @@ st.set_page_config(
 )
 
 
-# chat streaming
-class ChatCallbackHandler(BaseCallbackHandler):
-    ai_message = ""
-
-    def on_llm_start(self, *args, **kwargs):
-        self.message_box = st.empty()
-
-    def on_llm_new_token(self, token, *args, **kwargs):
-        self.ai_message += token
-        self.message_box.write(self.ai_message)
-
-    def on_llm_end(self, *args, **kwargs):
-        save_message(self.ai_message, "ai")
-
-
 # chat
 chat = None
-
+chatbot_session = ChatBotSession("document")
+chat_handler = ChatCallbackHandler(chatbot_session)
 
 # memory
-if "memory" not in st.session_state:
-    st.session_state["memory"] = ConversationBufferMemory(
-        return_messages=True,
-        memory_key="history",
+if chatbot_session.memory is None:
+    chatbot_session.set_memory(
+        ConversationBufferMemory(
+            return_messages=True,
+            memory_key="history",
+        )
     )
-memory = st.session_state["memory"]
 
 
 ### Functions
@@ -92,33 +83,6 @@ def embedding_file(file):
     return retriver
 
 
-# chat
-def save_message(message, role):
-    st.session_state.messages.append({"role": role, "message": message})
-
-
-def send_message(message, role, save=True):
-    with st.chat_message(role):
-        st.write(message)
-    if save:
-        save_message(message, role)
-
-
-def paint_history():
-    for message in st.session_state["messages"]:
-        send_message(
-            message["message"],
-            message["role"],
-            save=False,
-        )
-
-
-# ai
-def load_memory(_):
-    history = memory.load_memory_variables({})["history"]
-    return history
-
-
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
@@ -151,14 +115,14 @@ def respond(message, retriver):
             # prompt의 context에 들어갈 string을 생성해 반환해줌
             "context": retriver | RunnableLambda(format_docs),
             "question": RunnablePassthrough(),
-            "history": load_memory,
+            "history": chatbot_session.load_memory,
         }
         | prompt
         | chat
     )
 
     response = chain.invoke(message).content
-    memory.save_context({"input": message}, {"output": response})
+    chatbot_session.save_memory(message, response)
 
 
 ### Main
@@ -191,7 +155,7 @@ else:
 
     if chat is None:
         chat = ChatOpenAI(
-            temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
+            temperature=0.1, streaming=True, callbacks=[chat_handler]
         )
 
     # File upload widget
@@ -203,14 +167,14 @@ else:
     # File이 업로드 되면, File embedding 및 챗봇 시작
     if uploaded_file:
         retriver = embedding_file(uploaded_file)
-        send_message(
+        chatbot_session.send_message(
             "File uploaded and embedded successfully!",
             "ai",
             save=False,
         )
 
         # 채팅 히스토리
-        paint_history()
+        chatbot_session.paint_messages()
 
         # 메세지 입력창
         message = st.chat_input(
@@ -219,7 +183,7 @@ else:
 
         # 채팅
         if message:
-            send_message(message, "human")
+            chatbot_session.send_message(message, "human")
             with st.chat_message("ai"):
                 respond(message, retriver)
 
@@ -230,4 +194,3 @@ else:
             ## Upload a document to ask questions about its content.
             """,
         )
-        st.session_state["messages"] = []
