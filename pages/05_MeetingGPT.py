@@ -4,8 +4,10 @@ import os
 import math
 
 # utils
+from utils import common
 from utils.chat_callback_handler import ChatCallbackHandler
 from utils.chatbot_session import ChatBotSession
+from utils.docs_handler import DocsHandler
 
 # File
 from pydub import AudioSegment
@@ -22,12 +24,7 @@ from langchain.schema import StrOutputParser
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 
 # LangChain - Document
-from langchain.storage import LocalFileStore
-from langchain.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai.embeddings import OpenAIEmbeddings
-from langchain.embeddings.cache import CacheBackedEmbeddings
-from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 
 ### Settings
@@ -36,12 +33,16 @@ st.set_page_config(
     page_title="MeetingGPT",
     page_icon=":video_camera:",
 )
+float_init(theme=True)
+
 
 # Initialize
 openai = OpenAI()
 
-splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-    chunk_size=800, chunk_overlap=100
+docs_handler = DocsHandler(
+    RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=800, chunk_overlap=100
+    )
 )
 
 chatbot_session = ChatBotSession("meeting")
@@ -59,17 +60,11 @@ if chatbot_session.memory is None:
 
 
 ### Functions
-# TODO: 이 함수는 utils로 분리해야 함
-def check_dir(directory):
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-
 @st.cache_resource(show_spinner="Saving video...")
 def save_video(video):
     # setting path
     video_folder = "./.cache/videos"
-    check_dir(video_folder)
+    common.check_dir(video_folder)
 
     # save uploaded video
     video_content = video.read()
@@ -82,7 +77,7 @@ def save_video(video):
 @st.cache_resource(show_spinner="Extracting audio...")
 def extract_audio(video_path):
     audio_path = video_path.replace("videos", "audios").replace(".mp4", ".mp3")
-    check_dir(os.path.dirname(audio_path))
+    common.check_dir(os.path.dirname(audio_path))
 
     # -y: overwrite output files without asking
     # -i: input file
@@ -102,10 +97,10 @@ def split_audio(audio_path, segment_size):
 
     # setting path
     segment_folder = "./.cache/audios/segments"
-    check_dir(segment_folder)
+    common.check_dir(segment_folder)
 
     specific_segment_folder = f"{segment_folder}/{audio_name}"
-    check_dir(specific_segment_folder)
+    common.check_dir(specific_segment_folder)
 
     audio = AudioSegment.from_file(audio_path)
     segment_count = math.ceil(len(audio) / (segment_size * 1000))
@@ -135,7 +130,7 @@ def split_audio(audio_path, segment_size):
 @st.cache_resource(show_spinner="Transcribing audio...")
 def transcribe_audio(audio_segments_folder, filename):
     text_folder = "./.cache/texts"
-    check_dir(text_folder)
+    common.check_dir(text_folder)
 
     text_path = f"{text_folder}/{filename}.txt"
 
@@ -160,8 +155,7 @@ def transcribe_audio(audio_segments_folder, filename):
 def generate_summary(text_path):
     llm.streaming = False
 
-    loader = TextLoader(text_path)
-    docs = loader.load_and_split(text_splitter=splitter)
+    docs = docs_handler.split_n_return_docs(text_path)
 
     initial_prompt = PromptTemplate.from_template(
         """
@@ -202,26 +196,8 @@ def generate_summary(text_path):
     return summary
 
 
-def embedding_file(file_path):
-    cache_dir = "./.cache/embeddings"
-    check_dir(cache_dir)
-
-    embeddings = OpenAIEmbeddings()
-
-    cache_path = LocalFileStore(f"{cache_dir}/{os.path.basename(file_path)}")
-    loader = TextLoader(file_path)
-    docs = loader.load_and_split(text_splitter=splitter)
-    cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
-        embeddings, cache_path
-    )
-    vector_store = FAISS.from_documents(docs, cached_embeddings)
-    retriever = vector_store.as_retriever()
-
-    return retriever
-
-
 def answer_question(question, file_path):
-    retriever = embedding_file(file_path)
+    retriever = docs_handler.embedding_n_return_retriever(file_path)
 
     qna_prompt = ChatPromptTemplate.from_messages(
         [
@@ -246,7 +222,9 @@ def answer_question(question, file_path):
     qna_chain = (
         (
             {
-                "context": retriever | RunnableLambda(format_docs),
+                "context": (
+                    retriever | RunnableLambda(docs_handler.format_docs)
+                ),
                 "question": RunnablePassthrough(),
                 "history": chatbot_session.load_memory,
             }
@@ -260,13 +238,7 @@ def answer_question(question, file_path):
     chatbot_session.save_memory(question, answer)
 
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
 ### Main
-float_init(theme=True)
-
 transcription_tab, summary_tab, qna_tab = st.tabs(
     ["Transcription", "Summary", "Q&A"]
 )
@@ -298,6 +270,8 @@ if uploaded_video:
             st.write(summary_text)
 
     with qna_tab:
+        # TODO: Generate Summary 버튼을 눌러 해당 함수가 실행 되면, 완료 된 후에 qna_tab에 챗봇 아이콘이 여럿 생성돼있다
+        # 개수를 보아하니 summary 생성 할 때에 docs가 split 될 때를 엮어서 생각해 볼 수 있을 것 같다
         chatbot_session.send_message(
             "You can ask questions about the uploaded video.", "ai", save=False
         )
