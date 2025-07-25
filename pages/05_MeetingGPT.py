@@ -1,40 +1,65 @@
 import streamlit as st
-
-import subprocess
-from pydub import AudioSegment
-import math
+from streamlit_float import *
 import os
+import math
+
+# utils
+from utils.chat_callback_handler import ChatCallbackHandler
+from utils.chatbot_session import ChatBotSession
+
+# File
+from pydub import AudioSegment
+import subprocess
 import glob
+
+# OpenAI
 from openai import OpenAI
+
+# LangChain - Chain
 from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import TextLoader
 from langchain.schema import StrOutputParser
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+
+# LangChain - Document
+from langchain.storage import LocalFileStore
+from langchain.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain.embeddings.cache import CacheBackedEmbeddings
-from langchain.storage import LocalFileStore
 from langchain_community.vectorstores import FAISS
-from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.memory import ConversationBufferMemory
 
-st.title("MeetingGPT")
+### Settings
+# Set the page configuration
+st.set_page_config(
+    page_title="MeetingGPT",
+    page_icon=":video_camera:",
+)
 
+# Initialize
 openai = OpenAI()
 
 splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
     chunk_size=800, chunk_overlap=100
 )
 
-llm = ChatOpenAI(temperature=0.1)
+chatbot_session = ChatBotSession("meeting")
+chat_handler = ChatCallbackHandler(chatbot_session)
+llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
 
-if "memory" not in st.session_state:
-    st.session_state["memory"] = ConversationBufferMemory(
-        return_messages=True, memory_key="history"
+# memory
+if chatbot_session.memory is None:
+    chatbot_session.set_memory(
+        ConversationBufferMemory(
+            return_messages=True,
+            memory_key="history",
+        )
     )
-memory = st.session_state["memory"]
 
 
+### Functions
+# TODO: 이 함수는 utils로 분리해야 함
 def check_dir(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
@@ -116,7 +141,7 @@ def transcribe_audio(audio_segments_folder, filename):
 
     audio_files = glob.glob(f"{audio_segments_folder}/*.mp3")
     audio_files.sort()
-    print(audio_files)
+
     for audio_file in audio_files:
         with open(audio_file, "rb") as audio_file, open(
             text_path, "a"
@@ -132,7 +157,9 @@ def transcribe_audio(audio_segments_folder, filename):
 
 
 @st.cache_resource(show_spinner="Creating summary...")
-def create_summary(text_path):
+def generate_summary(text_path):
+    llm.streaming = False
+
     loader = TextLoader(text_path)
     docs = loader.load_and_split(text_splitter=splitter)
 
@@ -148,8 +175,6 @@ def create_summary(text_path):
     )
     initial_chain = initial_prompt | llm | StrOutputParser()
     summary = initial_chain.invoke({"context": docs[0].page_content})
-    print("Initial summary:")
-    print(summary)
 
     summary_prompt = PromptTemplate.from_template(
         """
@@ -169,14 +194,10 @@ def create_summary(text_path):
     )
     summary_chain = summary_prompt | llm | StrOutputParser()
 
-    for i, doc in enumerate(docs[1:]):
-        print(f"Processing document {i + 1}/{len(docs) - 1}")
-
+    for doc in docs[1:]:
         summary = summary_chain.invoke(
             {"previous_summary": summary, "context": doc.page_content}
         )
-
-        print(summary)
 
     return summary
 
@@ -197,10 +218,6 @@ def embedding_file(file_path):
     retriever = vector_store.as_retriever()
 
     return retriever
-
-
-# TODO
-# 챗봇 역할을 클래스로 따로 분리해야겠음
 
 
 def answer_question(question, file_path):
@@ -231,7 +248,7 @@ def answer_question(question, file_path):
             {
                 "context": retriever | RunnableLambda(format_docs),
                 "question": RunnablePassthrough(),
-                "history": load_memory,
+                "history": chatbot_session.load_memory,
             }
         )
         | qna_prompt
@@ -240,13 +257,7 @@ def answer_question(question, file_path):
     )
 
     answer = qna_chain.invoke(question)
-
-    return answer
-
-
-def load_memory(_):
-    history = memory.load_memory_variables({})["history"]
-    return history
+    chatbot_session.save_memory(question, answer)
 
 
 def format_docs(docs):
@@ -254,6 +265,7 @@ def format_docs(docs):
 
 
 ### Main
+float_init(theme=True)
 
 transcription_tab, summary_tab, qna_tab = st.tabs(
     ["Transcription", "Summary", "Q&A"]
@@ -276,18 +288,38 @@ if uploaded_video:
         specific_segment_folder, os.path.splitext(uploaded_video.name)[0]
     )
 
-    transcription = open(text_path, "r").read()
-
     with transcription_tab:
+        transcription = open(text_path, "r").read()
         st.write(transcription)
 
     with summary_tab:
         if st.button("Generate Summary"):
-            summary_text = create_summary(text_path)
+            summary_text = generate_summary(text_path)
             st.write(summary_text)
 
     with qna_tab:
-        question = st.text_input("Ask a question about the meeting:")
-        if question and st.button("Get Answer"):
-            answer = answer_question(question, text_path)
-            st.write(answer)
+        chatbot_session.send_message(
+            "You can ask questions about the uploaded video.", "ai", save=False
+        )
+
+        # 채팅 히스토리
+        chatbot_session.paint_messages()
+
+        with st.container():
+            # 질문 입력창
+            question = st.chat_input(
+                "Ask me anything about the uploaded video!"
+            )
+
+            # chat_input은 기본적으로 하단 고정이다. 하지만 tab, column 등에서는 그것이 적용되지 않는다.
+            # 해서, container를 새로 만들어주고, 아래 css를 이용해 해당 container의 위치를 고정시키는 방식을 적용한다.
+            # width는 50%를 했을 때 tab의 width와 사이즈가 일치했고, bottom은 숫자를 바꿔가며 직접 확인했는데 2rem 정도가 적당해 보였다.
+            float_parent(
+                css=float_css_helper(bottom="2rem", width="50%", transition=0)
+            )
+
+        # 채팅
+        if question:
+            chatbot_session.send_message(question, "human")
+            with st.chat_message("ai"):
+                answer_question(question, text_path)
