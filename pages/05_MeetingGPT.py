@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import streamlit as st
 from streamlit_float import *
 import os
@@ -28,6 +29,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.memory import ConversationBufferMemory
 
 ### Settings
+load_dotenv()
+
 # Set the page configuration
 st.set_page_config(
     page_title="MeetingGPT",
@@ -47,7 +50,6 @@ docs_handler = DocsHandler(
 
 chatbot_session = ChatBotSession("meeting")
 chat_handler = ChatCallbackHandler(chatbot_session)
-llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
 
 # memory
 if chatbot_session.memory is None:
@@ -153,7 +155,7 @@ def transcribe_audio(audio_segments_folder, filename):
 
 @st.cache_resource(show_spinner="Creating summary...")
 def generate_summary(text_path):
-    llm.streaming = False
+    llm = ChatOpenAI(temperature=0.1)
 
     docs = docs_handler.split_n_return_docs(text_path)
 
@@ -197,6 +199,8 @@ def generate_summary(text_path):
 
 
 def answer_question(question, file_path):
+    llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
+
     retriever = docs_handler.embedding_n_return_retriever(file_path)
 
     qna_prompt = ChatPromptTemplate.from_messages(
@@ -270,14 +274,13 @@ if uploaded_video:
             st.write(summary_text)
 
     with qna_tab:
-        # TODO: Generate Summary 버튼을 눌러 해당 함수가 실행 되면, 완료 된 후에 qna_tab에 챗봇 아이콘이 여럿 생성돼있다
-        # 개수를 보아하니 summary 생성 할 때에 docs가 split 될 때를 엮어서 생각해 볼 수 있을 것 같다
-        chatbot_session.send_message(
-            "You can ask questions about the uploaded video.", "ai", save=False
-        )
-
         # 채팅 히스토리
         chatbot_session.paint_messages()
+
+        # 첫 안내
+        chatbot_session.send_info(
+            "You can ask questions about the uploaded video."
+        )
 
         with st.container():
             # 질문 입력창

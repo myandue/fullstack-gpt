@@ -18,6 +18,10 @@ class ChatBotSession:
         if save:
             self.save_message(message, role)
 
+    def send_info(self, message: str):
+        if len(st.session_state[self.key]["messages"]) == 0:
+            self.send_message(message, "ai")
+
     def paint_messages(self):
         for message in st.session_state[self.key]["messages"]:
             self.send_message(message["message"], message["role"], save=False)

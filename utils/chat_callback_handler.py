@@ -21,4 +21,5 @@ class ChatCallbackHandler(BaseCallbackHandler):
         self.message_box.write(self.ai_message)
 
     def on_llm_end(self, *args, **kwargs):
-        self.session.save_message(self.ai_message, "ai")
+        if self.ai_message:
+            self.session.save_message(self.ai_message, "ai")
