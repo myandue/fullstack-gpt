@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 
 st.set_page_config(
@@ -41,6 +42,9 @@ if not st.session_state.get("api_key"):
                 st.success("✅ API Key registered")
             else:
                 st.warning("❗Invalid API Key format")
+
+else:
+    os.environ["OPENAI_API_KEY"] = st.session_state["api_key"]
 
 
 def render_clickable_card(title, path):

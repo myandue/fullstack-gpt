@@ -247,35 +247,22 @@ def respond(message, retriever):
 
 
 ### Main
-# api key widget
-with st.sidebar:
-    st.text_input(
-        "OpenAI API Key",
-        type="password",
-        placeholder="sk-...",
-        key="api_key",
-        disabled=bool(st.session_state.get("api_key")),
-    )
-
-    if st.session_state.get("api_key"):
-        st.success("✅ API Key registered")
-
-
 if not st.session_state.get("api_key"):
     st.markdown(
         """
-        ## Please enter your OpenAI API key<br>on the sidebar to use DocumentGPT.
-        """,
-        unsafe_allow_html=True,
+        ## Enter your OpenAI API key for using this app.
+        """
+    )
+    st.link_button(
+        "Go to Home",
+        "/",
+        help="You can enter your OpenAI API key on the Home page.",
     )
 
 else:
-    os.environ["OPENAI_API_KEY"] = st.session_state["api_key"]
-
-    if chat is None:
-        chat = ChatOpenAI(
-            temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
-        )
+    chat = ChatOpenAI(
+        temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
+    )
 
     with st.sidebar:
         # url widget

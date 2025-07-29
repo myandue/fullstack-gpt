@@ -38,7 +38,6 @@ st.set_page_config(
 )
 float_init(theme=True)
 
-
 # Initialize
 openai = OpenAI()
 
