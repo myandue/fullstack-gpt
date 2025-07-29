@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import streamlit as st
 from streamlit_float import *
 import os
@@ -29,28 +28,28 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.memory import ConversationBufferMemory
 
 ### Settings
-load_dotenv()
-
-# Set the page configuration
+# a. Set the page configuration
 st.set_page_config(
     page_title="MeetingGPT",
     page_icon=":video_camera:",
 )
 float_init(theme=True)
 
-# Initialize
+# b. Initialization
+# b-1. OpenAI
 openai = OpenAI()
 
-docs_handler = DocsHandler(
-    RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=800, chunk_overlap=100
-    )
+# b-2. docs
+docs_handler = DocsHandler()
+docs_handler.splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size=800, chunk_overlap=100
 )
 
+# b-3. chat
 chatbot_session = ChatBotSession("meeting")
 chat_handler = ChatCallbackHandler(chatbot_session)
 
-# memory
+# b-4. memory
 if chatbot_session.memory is None:
     chatbot_session.set_memory(
         ConversationBufferMemory(
@@ -160,12 +159,12 @@ def generate_summary(text_path):
 
     initial_prompt = PromptTemplate.from_template(
         """
-        Write a concise summary of the following.
-        The summary should be in the language of the text.
-        ------------
-        {context}
-        ------------
-        Use the language of the text.
+            Write a concise summary of the following.
+            The summary should be in the language of the text.
+            ------------
+            {context}
+            ------------
+            Use the language of the text.
         """
     )
     initial_chain = initial_prompt | llm | StrOutputParser()
@@ -173,18 +172,18 @@ def generate_summary(text_path):
 
     summary_prompt = PromptTemplate.from_template(
         """
-        Product a final summary.
-        The summary should be in the language of the text.
+            Product a final summary.
+            The summary should be in the language of the text.
 
-        Existing summary up to this point:
-        {previous_summary}
+            Existing summary up to this point:
+            {previous_summary}
 
-        New context:
-        ------------
-        {context}
-        ------------
+            New context:
+            ------------
+            {context}
+            ------------
 
-        Given the new context, refine the original summary.
+            Given the new context, refine the original summary.
         """
     )
     summary_chain = summary_prompt | llm | StrOutputParser()
@@ -197,7 +196,7 @@ def generate_summary(text_path):
     return summary
 
 
-def answer_question(question, file_path):
+def respond_to_question(question, file_path):
     llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
 
     retriever = docs_handler.embedding_n_return_retriever(file_path)
@@ -216,7 +215,7 @@ def answer_question(question, file_path):
 
                     Previous conversation:
                     {history}
-                    """,
+                """,
             ),
             ("human", "{question}"),
         ]
@@ -242,60 +241,75 @@ def answer_question(question, file_path):
 
 
 ### Main
-transcription_tab, summary_tab, qna_tab = st.tabs(
-    ["Transcription", "Summary", "Q&A"]
-)
+if not st.session_state.get("api_key"):
+    st.markdown(
+        """
+            ## Enter your OpenAI API key for using this app.
+        """
+    )
+    if st.button(
+        label="Go to Home",
+        help="You can enter your OpenAI API key on the Home page.",
+    ):
+        st.switch_page("Home.py")
 
-# File upload widget
-with st.sidebar:
-    uploaded_video = st.file_uploader(
-        "Upload a video file (MP4 format)",
-        type=["mp4"],
+else:
+    transcription_tab, summary_tab, qna_tab = st.tabs(
+        ["Transcription", "Summary", "Q&A"]
     )
 
-if uploaded_video:
-    video_path = save_video(uploaded_video)
-    audio_path = extract_audio(video_path)
-    specific_segment_folder = split_audio(
-        audio_path, segment_size=30
-    )  # 30 seconds
-    text_path = transcribe_audio(
-        specific_segment_folder, os.path.splitext(uploaded_video.name)[0]
-    )
-
-    with transcription_tab:
-        transcription = open(text_path, "r").read()
-        st.write(transcription)
-
-    with summary_tab:
-        if st.button("Generate Summary"):
-            summary_text = generate_summary(text_path)
-            st.write(summary_text)
-
-    with qna_tab:
-        # 채팅 히스토리
-        chatbot_session.paint_messages()
-
-        # 첫 안내
-        chatbot_session.send_info(
-            "You can ask questions about the uploaded video."
+    # File upload widget
+    with st.sidebar:
+        uploaded_video = st.file_uploader(
+            "Upload a video file (MP4 format)",
+            type=["mp4"],
         )
 
-        with st.container():
-            # 질문 입력창
-            question = st.chat_input(
-                "Ask me anything about the uploaded video!"
+    if uploaded_video:
+        video_path = save_video(uploaded_video)
+        audio_path = extract_audio(video_path)
+        specific_segment_folder = split_audio(
+            audio_path, segment_size=30
+        )  # 30 seconds
+        text_path = transcribe_audio(
+            specific_segment_folder, os.path.splitext(uploaded_video.name)[0]
+        )
+
+        with transcription_tab:
+            transcription = open(text_path, "r").read()
+            st.write(transcription)
+
+        with summary_tab:
+            if st.button("Generate Summary"):
+                summary_text = generate_summary(text_path)
+                st.write(summary_text)
+
+        with qna_tab:
+            # 채팅 히스토리
+            chatbot_session.paint_messages()
+
+            # 첫 안내
+            chatbot_session.send_info(
+                "You can ask questions about the uploaded video."
             )
 
-            # chat_input은 기본적으로 하단 고정이다. 하지만 tab, column 등에서는 그것이 적용되지 않는다.
-            # 해서, container를 새로 만들어주고, 아래 css를 이용해 해당 container의 위치를 고정시키는 방식을 적용한다.
-            # width는 50%를 했을 때 tab의 width와 사이즈가 일치했고, bottom은 숫자를 바꿔가며 직접 확인했는데 2rem 정도가 적당해 보였다.
-            float_parent(
-                css=float_css_helper(bottom="2rem", width="50%", transition=0)
-            )
+            with st.container():
+                # 질문 입력창
+                question = st.chat_input(
+                    "Ask me anything about the uploaded video!"
+                )
 
-        # 채팅
-        if question:
-            chatbot_session.send_message(question, "human")
-            with st.chat_message("ai"):
-                answer_question(question, text_path)
+                # chat_input은 기본적으로 하단 고정이다. 하지만 tab, column 등에서는 그것이 적용되지 않는다.
+                # 해서, container를 새로 만들어주고, 아래 css를 이용해 해당 container의 위치를 고정시키는 방식을 적용한다.
+                # width는 50%를 했을 때 tab의 width와 사이즈가 일치했고, bottom은 숫자를 바꿔가며 직접 확인했는데 2rem 정도가 적당해 보였다.
+                float_parent(
+                    css=float_css_helper(
+                        bottom="2rem", width="50%", transition=0
+                    )
+                )
+
+            # 채팅
+            if question:
+                chatbot_session.send_message(question, "human")
+                with st.chat_message("ai"):
+                    respond_to_question(question, text_path)

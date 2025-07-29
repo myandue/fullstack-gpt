@@ -1,36 +1,36 @@
 import streamlit as st
-import os
 import json
 
-# File
-from langchain_community.document_loaders import UnstructuredFileLoader
+# utils
+from utils.docs_handler import DocsHandler
 
-# Wikipedia
-from langchain_community.retrievers import WikipediaRetriever
-
-# Chat
+# LangChain - Chain
 from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnableMap
-from langchain.schema import BaseOutputParser
+
+# LangChain - Wikipedia
+from langchain_community.retrievers import WikipediaRetriever
 
 ### Settings
-# Set the page configuration
+# a. Set the page configuration
 st.set_page_config(
     page_title="QuizGPT",
     page_icon=":question:",
 )
 
-# initialization
-chat = None
+# b. Initialization
+docs_handler = DocsHandler()
+
 docs = None
 success_count = 0
 
 function = {
     "name": "make_quiz",
     "description": (
-        "function that takes a list of questions and answers and returns a"
-        " quiz"
+        """
+            function that takes a list of questions and answers and returns a quiz
+        """
     ),
     "parameters": {
         "type": "object",
@@ -63,54 +63,17 @@ function = {
 
 
 ### Functions
-# file
-@st.cache_resource(show_spinner="Loading file...")
 def load_file(file):
-    # setting path
-    file_path = "./.cache/quiz_files"
-    if not os.path.exists(file_path):
-        os.makedirs(file_path)
+    text_path = docs_handler.save_text_file(file)
 
-    # 업로드한 파일 저장
-    file_content = uploaded_file.read()
-    with open(f"{file_path}/{uploaded_file.name}", "wb") as f:
-        f.write(file_content)
-
-    # load
-    file = UnstructuredFileLoader(f"{file_path}/{uploaded_file.name}")
-
-    return file.load()
+    return docs_handler.load_file(text_path)
 
 
-# document list -> string
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
-# wikipedia
 @st.cache_resource(show_spinner="Searching Wikipedia...")
 def search_wikipedia(topic):
     retriever = WikipediaRetriever(top_k_results=5)
 
     return retriever.get_relevant_documents(topic)
-
-
-# prompts
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-         You are a helpful assistant that creates quizzes from documents.
-         Based ONLY the content of the provided documents, create a quiz with 10 questions to test the user's knowledge about the text.
-         Questions' difficulty should be around {level}.
-         Each question should have 4 multiple choice answers, with one correct answer and three of them must be wrong.
-
-         Context: {context}
-         """,
-        )
-    ]
-)
 
 
 ### caching 에 대한 기록
@@ -125,16 +88,33 @@ prompt = ChatPromptTemplate.from_messages(
 
 @st.cache_resource(show_spinner="Creating quiz...")
 def make_quiz(_docs, topic, level):
-    # chain
+    llm = ChatOpenAI(temperature=0.1)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+             You are a helpful assistant that creates quizzes from documents.
+             Based ONLY the content of the provided documents, create a quiz with 10 questions to test the user's knowledge about the text.
+             Questions' difficulty should be around {level}.
+             Each question should have 4 multiple choice answers, with one correct answer and three of them must be wrong.
+
+             Context: {context}
+             """,
+            )
+        ]
+    )
+
     chain = (
         RunnableMap(
             {
-                "context": lambda x: format_docs(x["docs"]),
+                "context": lambda x: docs_handler.format_docs(x["docs"]),
                 "level": lambda x: x["level"],
             }
         )
         | prompt
-        | chat.bind(function_call={"name": "make_quiz"}, functions=[function])
+        | llm.bind(function_call={"name": "make_quiz"}, functions=[function])
     )
 
     return json.loads(
@@ -151,18 +131,13 @@ if not st.session_state.get("api_key"):
         ## Enter your OpenAI API key for using this app.
         """
     )
-    st.link_button(
-        "Go to Home",
-        "/",
+    if st.button(
+        label="Go to Home",
         help="You can enter your OpenAI API key on the Home page.",
-    )
+    ):
+        st.switch_page("Home.py")
 
 else:
-    # chat
-    chat = ChatOpenAI(
-        temperature=0.1,
-    )
-
     with st.sidebar:
         # for quiz
         mode = st.selectbox(
@@ -187,14 +162,14 @@ else:
 if not docs:
     st.markdown(
         """
-    # Welcome to QuizGPT!
+            # Welcome to QuizGPT!
 
-    I will make a quiz from Wikipedia articles or files you upload to test your knowledge and help you learn.
+            I will make a quiz from Wikipedia articles or files you upload to test your knowledge and help you learn.
 
-    First, please enter your OpenAI API key in the sidebar to use QuizGPT.
+            First, please enter your OpenAI API key in the sidebar to use QuizGPT.
 
-    And then, select a mode from the sidebar and provide the necessary input.
-    """
+            And then, select a mode from the sidebar and provide the necessary input.
+        """
     )
 else:
     # difficulty

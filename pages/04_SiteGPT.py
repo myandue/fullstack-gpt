@@ -1,55 +1,44 @@
 import streamlit as st
-import os
 
-# Site Load
-from langchain_community.document_loaders import SitemapLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
+# utils
+from utils.chat_callback_handler import ChatCallbackHandler
+from utils.chatbot_session import ChatBotSession
 
-# Chat
+# LangChain - Chain
 from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
+from langchain.schema import StrOutputParser
 from langchain.schema.runnable import RunnableLambda, RunnablePassthrough
+
+# LangChain - Document, Site Load
+from langchain_community.document_loaders import SitemapLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.memory import ConversationBufferMemory
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
 
 ### Settings
 # a. Set the page configuration
 st.set_page_config(page_title="SiteGPT", page_icon="🔍")
 
 
-# b. initilization
-# b-1-1. chat
-chat = None
-
-
-# b-1-2. chat streaming
-class ChatCallbackHandler(BaseCallbackHandler):
-    ai_message = ""
-
-    def on_llm_start(self, *args, **kwargs):
-        self.message_box = st.empty()
-
-    def on_llm_new_token(self, token, *args, **kwargs):
-        self.ai_message += token
-        self.message_box.write(self.ai_message)
-
-    def on_llm_end(self, *args, **kwargs):
-        if self.ai_message:
-            save_message(self.ai_message, "ai")
+# b. Initilization
+# b-1. chat
+chatbot_session = ChatBotSession("site")
+chat_handler = ChatCallbackHandler(chatbot_session)
 
 
 # b-2. memory
-if "memory" not in st.session_state:
-    st.session_state["memory"] = ConversationBufferMemory(
-        return_messages=True, memory_key="history"
+if chatbot_session.memory is None:
+    chatbot_session.set_memory(
+        ConversationBufferMemory(
+            return_messages=True,
+            memory_key="history",
+        )
     )
-memory = st.session_state["memory"]
 
 
 ### Functions
-# a. site
 def parse_page(soup):
     header = soup.find("header")
     footer = soup.find("footer")
@@ -76,88 +65,68 @@ def load_site(url):
     return vector_store.as_retriever()
 
 
-# b. chat
-def save_message(message, role):
-    st.session_state.messages.append({"role": role, "message": message})
-
-
-def send_message(message, role, save=True):
-    with st.chat_message(role):
-        st.write(message)
-    if save:
-        save_message(message, role)
-
-
-# c. chat history
-def paint_history():
-    for message in st.session_state["messages"]:
-        send_message(message["message"], message["role"], save=False)
-
-
-# d. memory
-def load_memory(_):
-    return memory.load_memory_variables({})["history"]
-
-
-search_history_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-    If a similar question exists in the following context('Previous conversation'), return the same answer.
-    Else, just return a word 'False'
-
-    Previous conversation:\n{history}\n\n
-    """,
-        ),
-        ("human", "{question}"),
-    ]
-)
-
-
 def search_history(inputs):
-    chat.streaming = False
+    llm = ChatOpenAI(temperature=0.1)
+
+    search_history_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                    If a similar question exists in the following context('Previous conversation'), return the same answer.
+                    Else, just return a word 'False'
+
+                    Previous conversation:\n{history}\n\n
+                """,
+            ),
+            ("human", "{question}"),
+        ]
+    )
 
     search_history_chain = (
-        {"history": load_memory, "question": RunnablePassthrough()}
+        {
+            "history": chatbot_session.load_memory,
+            "question": RunnablePassthrough(),
+        }
         | search_history_prompt
-        | chat
+        | llm
+        | StrOutputParser()
     )
-    inputs["answer"] = search_history_chain.invoke(inputs["question"]).content
+
+    inputs["answer"] = search_history_chain.invoke(inputs["question"])
 
     return inputs
 
 
-# e. answers
-answers_prompt = ChatPromptTemplate.from_template(
-    """
-        Using ONLY the following context answer the user's question. If you can't, just say you don't know. Don't make anything up.
-        Then, give a score to the answer between 0 and 5.
-        If the answer answers the user's question, the score should be high. Else it should be low.
-        Make sure to always include the answer's score even if it's 0.
-        
-        Context: {context}
-        
-        Examples:
-        
-        Question: How far away is the moon?
-        Answer: The moon is 384,400 km away.
-        Score: 5
-        
-        Question: How far away is the sun?
-        Answer: I don't know.
-        Score: 0
-        
-        Your turn!
-        
-        Question: {question}
-    """
-)
-
-
 def get_answers(inputs):
-    chat.streaming = False
-    answers_chain = answers_prompt | chat
+    llm = ChatOpenAI(temperature=0.1)
+
+    answers_prompt = ChatPromptTemplate.from_template(
+        """
+            Using ONLY the following context answer the user's question. If you can't, just say you don't know. Don't make anything up.
+            Then, give a score to the answer between 0 and 5.
+            If the answer answers the user's question, the score should be high. Else it should be low.
+            Make sure to always include the answer's score even if it's 0.
+
+            Context: {context}
+
+            Examples:
+
+            Question: How far away is the moon?
+            Answer: The moon is 384,400 km away.
+            Score: 5
+
+            Question: How far away is the sun?
+            Answer: I don't know.
+            Score: 0
+
+            Your turn!
+
+            Question: {question}
+        """
+    )
+
+    answers_chain = answers_prompt | llm | StrOutputParser()
 
     docs = inputs["docs"]
     question = inputs["question"]
@@ -166,10 +135,8 @@ def get_answers(inputs):
         "question": question,
         "answers": [
             {
-                "answer": (
-                    answers_chain.invoke(
-                        {"context": doc.page_content, "question": question}
-                    ).content
+                "answer": answers_chain.invoke(
+                    {"context": doc.page_content, "question": question}
                 ),
                 "source": doc.metadata["source"],
             }
@@ -178,31 +145,31 @@ def get_answers(inputs):
     }
 
 
-choose_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-    Use ONLY the following pre-existing answers to answer user's question.
-    Use the answers that have the highest score (more helpful) and favor the most recent ones.
-    Cite sources and return the sources of the answers as they are, do not change them.
-
-    Please follow the following answer's format.
-
-    {{The answer you chose}}
-    [{{The source of the answer you chose}}]
-
-    Answers: {answers}
-    """,
-        ),
-        ("human", "{question}"),
-    ]
-)
-
-
 def choose_answer(inputs):
-    chat.streaming = True
-    choose_chain = choose_prompt | chat
+    llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
+
+    choose_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                    Use ONLY the following pre-existing answers to answer user's question.
+                    Use the answers that have the highest score (more helpful) and favor the most recent ones.
+                    Cite sources and return the sources of the answers as they are, do not change them.
+
+                    Please follow the following answer's format.
+
+                    {{The answer you chose}}
+                    [{{The source of the answer you chose}}]
+
+                    Answers: {answers}
+                """,
+            ),
+            ("human", "{question}"),
+        ]
+    )
+
+    choose_chain = choose_prompt | llm | StrOutputParser()
 
     question = inputs["question"]
     answers = inputs["answers"]
@@ -215,16 +182,17 @@ def choose_answer(inputs):
     with st.chat_message("ai"):
         response = choose_chain.invoke(
             {"answers": condensed, "question": question}
-        ).content
-        memory.save_context({"input": question}, {"output": response})
+        )
+        chatbot_session.save_memory(question, response)
 
 
-def new_answer(inputs):
+def get_answer(inputs):
+    # history에 없을 경우 get new answers
     if inputs["answer"] == "False":
         retriever = inputs["retriever"]
         question = inputs["question"]
 
-        new_answer_chain = (
+        get_answer_chain = (
             {
                 "docs": retriever,
                 "question": RunnablePassthrough(),
@@ -233,17 +201,19 @@ def new_answer(inputs):
             | RunnableLambda(choose_answer)
         )
 
-        new_answer_chain.invoke(question)
+        get_answer_chain.invoke(question)
 
+    # history에 있을 경우, history에서 답변을 불러옴
     else:
-        send_message(inputs["answer"], "ai")
+        chatbot_session.send_message(inputs["answer"], "ai")
 
 
-# f. main - ai's response
-def respond(message, retriever):
-    chain = search_history | RunnableLambda(new_answer)
+def respond_to_question(question, url):
+    retriever = load_site(url)
 
-    chain.invoke({"question": message, "retriever": retriever})
+    chain = search_history | RunnableLambda(get_answer)
+
+    chain.invoke({"question": question, "retriever": retriever})
 
 
 ### Main
@@ -253,17 +223,13 @@ if not st.session_state.get("api_key"):
         ## Enter your OpenAI API key for using this app.
         """
     )
-    st.link_button(
-        "Go to Home",
-        "/",
+    if st.button(
+        label="Go to Home",
         help="You can enter your OpenAI API key on the Home page.",
-    )
+    ):
+        st.switch_page("Home.py")
 
 else:
-    chat = ChatOpenAI(
-        temperature=0.1, streaming=True, callbacks=[ChatCallbackHandler()]
-    )
-
     with st.sidebar:
         # url widget
         url = st.text_input(
@@ -273,29 +239,30 @@ else:
     if url:
         if ".xml" not in url:
             with st.sidebar:
-                st.error("")
+                st.error("Please write down a valid sitemap URL.")
+
         else:
-            retriever = load_site(url)
-            send_message("Website loaded successfully!", "ai", save=False)
-
             # 채팅 히스토리
-            paint_history()
+            chatbot_session.paint_messages()
 
-            # 메세지 입력창
-            message = st.chat_input(
+            # 첫 안내
+            chatbot_session.send_info("Website loaded successfully!")
+
+            # 질문 입력창
+            question = st.chat_input(
                 "Ask me anything about the website you write down."
             )
 
             # 채팅
-            if message:
-                send_message(message, "human")
-                respond(message, retriever)
+            if question:
+                chatbot_session.send_message(question, "human")
+                with st.chat_message("ai"):
+                    respond_to_question(question, url)
 
     else:
         st.title("SiteGPT")
         st.markdown(
             """
-        ## Write down an URL to ask questions about its content.
-        """
+                ## Write down an URL to ask questions about its content.
+            """
         )
-        st.session_state["messages"] = []

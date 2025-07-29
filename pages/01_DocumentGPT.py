@@ -1,39 +1,41 @@
 import streamlit as st
-import os
 
 # utils
 from utils.chat_callback_handler import ChatCallbackHandler
 from utils.chatbot_session import ChatBotSession
+from utils.docs_handler import DocsHandler
 
-# File
-from langchain_community.document_loaders import UnstructuredFileLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.storage import LocalFileStore
-from langchain.embeddings.cache import CacheBackedEmbeddings
-from langchain_openai.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
-
-# Chat
+# LangChain - Chain
 from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
+from langchain.schema import StrOutputParser
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+
+# LangChain - Document
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferMemory
-from langchain.callbacks.base import BaseCallbackHandler
 
 ### Settings
-# Set the page configuration
+# a. Set the page configuration
 st.set_page_config(
     page_title="DocumentGPT",
     page_icon=":page_facing_up:",
 )
 
+# b. Initialization
+# b-1. docs
+docs_handler = DocsHandler()
+docs_handler.splitter = CharacterTextSplitter.from_tiktoken_encoder(
+    separator="\n",
+    chunk_size=600,
+    chunk_overlap=100,
+)
 
-# chat
-chat = None
+# b-2. chat
 chatbot_session = ChatBotSession("document")
 chat_handler = ChatCallbackHandler(chatbot_session)
 
-# memory
+# b-3. memory
 if chatbot_session.memory is None:
     chatbot_session.set_memory(
         ConversationBufferMemory(
@@ -44,105 +46,61 @@ if chatbot_session.memory is None:
 
 
 ### Functions
-# file
-# 업로드한 파일이 이미 존재하는 경우 해당 함수를 실행하지 않음
-@st.cache_resource(show_spinner="Embedding file...")
-def embedding_file(file):
-    # setting path
-    file_path = "./.cache/files"
-    if not os.path.exists(file_path):
-        os.makedirs(file_path)
+def respond_to_question(question, file_path):
+    llm = ChatOpenAI(temperature=0.1, streaming=True, callbacks=[chat_handler])
 
-    cache_path = "./.cache/embeddings"
-    if not os.path.exists(cache_path):
-        os.makedirs(cache_path)
+    retriever = docs_handler.embedding_n_return_retriever(file_path)
 
-    # 업로드한 파일 저장
-    file_content = uploaded_file.read()
-    with open(f"{file_path}/{uploaded_file.name}", "wb") as f:
-        f.write(file_content)
-
-    # set up the embedding process
-    cache_dir = LocalFileStore(f"{cache_path}/{uploaded_file.name}")
-    splitter = CharacterTextSplitter.from_tiktoken_encoder(
-        separator="\n",
-        chunk_size=600,
-        chunk_overlap=100,
-    )
-    embeddings = OpenAIEmbeddings()
-
-    # file embedding
-    file = UnstructuredFileLoader(f"./.cache/files/{uploaded_file.name}")
-    docs = file.load_and_split(text_splitter=splitter)
-    cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
-        embeddings, cache_dir
-    )
-    vector_store = FAISS.from_documents(docs, cached_embeddings)
-    retriver = vector_store.as_retriever()
-
-    return retriver
-
-
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
-# ai response
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
+    prompt = ChatPromptTemplate.from_messages(
+        [
             (
-                "You are a helpful assistant. Answer quetions using"
-                " only the following context. If you don't know the"
-                " answer just say you don't know, don't make it"
-                " up:\n\n"
-                "Context:\n{context}\n\n"
-                "Previous conversation:\n{history}\n\n"
+                "system",
+                (
+                    "You are a helpful assistant. Answer quetions using"
+                    " only the following context. If you don't know the"
+                    " answer just say you don't know, don't make it"
+                    " up:\n\n"
+                    "Context:\n{context}\n\n"
+                    "Previous conversation:\n{history}\n\n"
+                ),
             ),
-        ),
-        ("human", "{question}"),
-    ]
-)
+            ("human", "{question}"),
+        ]
+    )
 
-
-def respond(message, retriver):
     # chain은 하나의 string(message)을 받는다
     chain = (
         {
             # retriver는 string(message)을 받아 List of Document를 chain의 두 번째 component(RunnableLambda)에 전달
             # RunnableLambda는 List of Document를 받아 함수(format_docs)를 실행
             # prompt의 context에 들어갈 string을 생성해 반환해줌
-            "context": retriver | RunnableLambda(format_docs),
+            "context": retriever | RunnableLambda(docs_handler.format_docs),
             "question": RunnablePassthrough(),
             "history": chatbot_session.load_memory,
         }
         | prompt
-        | chat
+        | llm
+        | StrOutputParser()
     )
 
-    response = chain.invoke(message).content
-    chatbot_session.save_memory(message, response)
+    answer = chain.invoke(question)
+    chatbot_session.save_memory(question, answer)
 
 
 ### Main
 if not st.session_state.get("api_key"):
     st.markdown(
         """
-        ## Enter your OpenAI API key for using this app.
+            ## Enter your OpenAI API key for using this app.
         """
     )
-    st.link_button(
-        "Go to Home",
-        "/",
+    if st.button(
+        label="Go to Home",
         help="You can enter your OpenAI API key on the Home page.",
-    )
+    ):
+        st.switch_page("Home.py")
 
 else:
-    chat = ChatOpenAI(
-        temperature=0.1, streaming=True, callbacks=[chat_handler]
-    )
-
     # File upload widget
     with st.sidebar:
         uploaded_file = st.file_uploader(
@@ -151,31 +109,31 @@ else:
 
     # File이 업로드 되면, File embedding 및 챗봇 시작
     if uploaded_file:
-        retriver = embedding_file(uploaded_file)
-        chatbot_session.send_message(
-            "File uploaded and embedded successfully!",
-            "ai",
-            save=False,
-        )
+        text_path = docs_handler.save_text_file(uploaded_file)
 
         # 채팅 히스토리
         chatbot_session.paint_messages()
 
-        # 메세지 입력창
-        message = st.chat_input(
+        # 첫 안내
+        chatbot_session.send_info(
+            "File uploaded and embedded successfully!",
+        )
+
+        # 질문 입력창
+        question = st.chat_input(
             "Ask me anything about the uploaded file!",
         )
 
         # 채팅
-        if message:
-            chatbot_session.send_message(message, "human")
+        if question:
+            chatbot_session.send_message(question, "human")
             with st.chat_message("ai"):
-                respond(message, retriver)
+                respond_to_question(question, text_path)
 
     else:
         st.title("DocumentGPT")
         st.markdown(
             """
-            ## Upload a document to ask questions about its content.
+                ## Upload a document to ask questions about its content.
             """,
         )
