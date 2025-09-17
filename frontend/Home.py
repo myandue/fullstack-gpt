@@ -49,11 +49,27 @@ st.markdown(
     """
 )
 
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+
 
 if "api_key" not in st.session_state:
     st.session_state.api_key = None
 
-if not st.session_state.get("api_key"):
+if not st.session_state.get("access_token"):
+    st.markdown(
+        """
+        ### Please login to use various functions.<br>You can use various functions after login.<br>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Sign Up"):
+        st.switch_page("pages/sign_up.py")
+    if st.button("Login"):
+        st.switch_page("pages/login.py")
+
+
+elif not st.session_state.get("api_key"):
     st.markdown(
         """
         ### Please enter your OpenAI API key on the sidebar.<br>You can use various functions.<br>
