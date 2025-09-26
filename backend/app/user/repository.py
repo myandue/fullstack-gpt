@@ -1,16 +1,14 @@
 from sqlalchemy.orm import Session
 
-from . import models, schemas
+from . import model, schemas
 
 
 def get_user_by_username(db: Session, username: str):
-    return (
-        db.query(models.User).filter(models.User.username == username).first()
-    )
+    return db.query(model.User).filter(model.User.username == username).first()
 
 
 def create_user(db: Session, user: schemas.UserCreate, hashed_pw: str):
-    db_user = models.User(
+    db_user = model.User(
         username=user.username,
         email=user.email,
         password=hashed_pw,

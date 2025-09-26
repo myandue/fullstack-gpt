@@ -10,3 +10,7 @@ def register_user(db: Session, user: schemas.UserCreate):
         raise ValueError("Email already registered")
     hashed_pw = get_password_hash(user.password)
     return repository.create_user(db, user, hashed_pw)
+
+
+def get_user_by_username(db: Session, username: str):
+    return repository.get_user_by_username(db, username)
